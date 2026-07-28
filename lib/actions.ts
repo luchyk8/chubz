@@ -1,19 +1,19 @@
 "use server";
 
-import { promises as fs } from "fs";
-import path from "path";
+import { Resend } from "resend";
 import type { EnquiryFormState, EnquiryType } from "@/lib/types";
+import { buildEnquiryEmail } from "@/lib/email";
+import { ENQUIRY_RECIPIENT_EMAIL, DEFAULT_EMAIL_FROM } from "@/lib/constants";
 
 // One shared handler for every enquiry form on the site (vehicle purchase,
 // chauffeur, self-drive, airport transfer, detailing, general) — see the
 // Contact / Enquiry System section of the UI/UX Specification.
 //
-// PHASE 1 NOTE: there is no confirmed CRM/inbox to wire this up to yet, so
-// submissions are validated and appended to a local JSON Lines file. This
-// keeps the form fully functional end-to-end without inventing a fake
-// integration. Before real launch, replace `persistEnquiry` below with a
-// real email/CRM call (e.g. Resend, HubSpot, a Google Sheet webhook) —
-// everything upstream of it (validation, state, UI) will not need to change.
+// Submissions are emailed directly via Resend to ENQUIRY_RECIPIENT_EMAIL.
+// RESEND_API_KEY is read from the server environment only — this file has
+// no client boundary (it's a Server Action module), so the key is never
+// sent to the browser. Do not import anything from this file into a
+// Client Component other than the exported submitEnquiry function itself.
 
 const REQUIRED: Record<EnquiryType, string[]> = {
   vehiclePurchase: ["name", "phone", "message"],
@@ -47,21 +47,11 @@ const LABELS: Record<string, string> = {
   location: "Location",
 };
 
+const GENERIC_ERROR_MESSAGE =
+  "Sorry — something went wrong sending your enquiry. Please try again, or contact us directly by phone, WhatsApp or Instagram.";
+
 function isEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-}
-
-async function persistEnquiry(record: Record<string, unknown>) {
-  try {
-    const dir = path.join(process.cwd(), ".data");
-    await fs.mkdir(dir, { recursive: true });
-    const file = path.join(dir, "enquiries.jsonl");
-    await fs.appendFile(file, JSON.stringify(record) + "\n", "utf8");
-  } catch {
-    // In read-only production environments (e.g. serverless), this write
-    // may fail. That's expected at this phase — swap in a real
-    // email/CRM integration before go-live rather than relying on disk.
-  }
 }
 
 export async function submitEnquiry(
@@ -95,11 +85,42 @@ export async function submitEnquiry(
     };
   }
 
-  await persistEnquiry({
-    enquiryType,
-    submittedAt: new Date().toISOString(),
-    ...entries,
-  });
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    // Fails loudly in server logs so a missing env var in a given
+    // environment (e.g. Preview without the var set) is easy to spot,
+    // but the visitor still gets a clean, honest error state rather than
+    // a silent "success" with nothing actually delivered.
+    console.error(
+      "submitEnquiry: RESEND_API_KEY is not set — enquiry email not sent."
+    );
+    return { status: "error", message: GENERIC_ERROR_MESSAGE };
+  }
+
+  try {
+    const resend = new Resend(apiKey);
+    const { subject, html, text } = buildEnquiryEmail(enquiryType, entries);
+    const from = process.env.RESEND_FROM_EMAIL || DEFAULT_EMAIL_FROM;
+    const replyTo =
+      entries.email && isEmail(entries.email) ? entries.email : undefined;
+
+    const { error } = await resend.emails.send({
+      from,
+      to: ENQUIRY_RECIPIENT_EMAIL,
+      subject,
+      html,
+      text,
+      replyTo,
+    });
+
+    if (error) {
+      console.error("submitEnquiry: Resend returned an error:", error);
+      return { status: "error", message: GENERIC_ERROR_MESSAGE };
+    }
+  } catch (err) {
+    console.error("submitEnquiry: unexpected error sending email:", err);
+    return { status: "error", message: GENERIC_ERROR_MESSAGE };
+  }
 
   return {
     status: "success",

@@ -42,6 +42,16 @@ export const NAV_LINKS = [
   { label: "About", href: "/about" },
 ] as const;
 
+// Every enquiry form on the site (see lib/actions.ts) sends its notification
+// email here via Resend. Not a secret — safe to keep in source.
+export const ENQUIRY_RECIPIENT_EMAIL = "vlucik94@gmail.com";
+
+// Resend's shared test sender, usable without a verified domain. Once
+// CHUBZ MOTORS verifies a sending domain in Resend, set RESEND_FROM_EMAIL
+// in the environment (e.g. "CHUBZ MOTORS <enquiries@chubzmotors.co.uk>")
+// and it will be used automatically instead — see lib/actions.ts.
+export const DEFAULT_EMAIL_FROM = "CHUBZ MOTORS Website <onboarding@resend.dev>";
+
 export const FOOTER_LINKS = {
   explore: [
     { label: "Cars for Sale", href: "/cars" },
